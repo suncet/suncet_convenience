@@ -14,8 +14,8 @@ solar_conditions = 'max'
 # Constants -- really these are tuneable inputs too, but don't expect to change them much for SunCET
 coefficient_of_drag = 2.5 * u.dimensionless_unscaled # depends on shape but 2.5 is typical
 asymmetric_surface_area = 0.144 * u.m**2 # area normal to velocity vector, e.g., the solar array sailing against the wind imparting torque in one direction about the spacecraft
-#torque_lever_arm = (0.36 + (0.1 - 0.061)) * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. 0.36 m [one panel out to get to array center] + (0.1 - 0.061) m [from +Y wall to deployed cg based on CDR Bus slide 13]
-torque_lever_arm = 0.203 * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. Evan's idea to dual deploy by first panel normal, second panel unfolds in perpindicular direction
+torque_lever_arm = (0.36 + (0.1 - 0.061)) * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. 0.36 m [one panel out to get to array center] + (0.1 - 0.061) m [from +Y wall to deployed cg based on CDR Bus slide 13]
+#torque_lever_arm = 0.203 * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. Evan's idea to dual deploy by first panel normal, second panel unfolds in perpindicular direction
 torque_rod_mag_field_angle = 90 * u.deg # angle between the torque rod and the Earth's magnetic field at the location of the spacecraft. Best case scenario is 90º which will provide max torque. 
 
 # Input data
@@ -47,10 +47,55 @@ minutes_since_start = ((orbit_sun_vector_to_velocity_vector_angle['Time (UTCG)']
 torque_drag_peak = (1/2 * atmospheric_density * velocity**2 * coefficient_of_drag * asymmetric_surface_area * torque_lever_arm).to(u.N * u.m)
 time_to_saturate_wheels_if_always_peak_drag = (adcs_momentum_storage/torque_drag_peak).to(u.minute) # From wheel at 0 speed, how long until it saturates with disturbance torques above?
 torque_drag_vs_time = (1/2 * atmospheric_density * velocity**2 * coefficient_of_drag * asymmetric_surface_area_projected_vs_time * torque_lever_arm).to(u.N * u.m)
-cumulative_torque = cumtrapz(torque_drag_vs_time, (minutes_since_start * 60), initial=0) * torque_drag_vs_time.unit * u.s
-target_index = np.argmax(cumulative_torque >= adcs_momentum_storage)
-target_time = minutes_since_start[target_index] if cumulative_torque[target_index] >= adcs_momentum_storage else None
+cumulative_torque_drag = cumtrapz(torque_drag_vs_time, (minutes_since_start * 60), initial=0) * torque_drag_vs_time.unit * u.s
 
+
+cumulative_torque_rods = np.zeros_like(cumulative_torque_drag)
+net_torque = np.zeros_like(cumulative_torque_drag)
+current_cumulative_torque_rod = 0
+for i in range(1, len(cumulative_torque_drag)):
+    # Calculate the incremental torque rod effect (resetting if the drag torque sign changes)
+    if np.sign(cumulative_torque_drag[i]) != np.sign(cumulative_torque_drag[i-1]):
+        current_cumulative_torque_rod = 0  # Reset cumulative torque rod effect when the sign flips
+    if net_torque[i-1] < 0: 
+        direction_of_torque_rod = 1
+    else: 
+        direction_of_torque_rod = -1
+    current_cumulative_torque_rod += direction_of_torque_rod * torque_rod_torque * ((minutes_since_start[i] - minutes_since_start[i-1]) * u.minute).to(u.s)
+    cumulative_torque_rods[i] = current_cumulative_torque_rod
+    
+    net_torque[i] = cumulative_torque_drag[i] + cumulative_torque_rods[i]
+
+target_index = np.argmax(net_torque >= adcs_momentum_storage)
+target_time = minutes_since_start[target_index] if net_torque[target_index] >= adcs_momentum_storage else None
+
+
+# Plot the torques
+fig, axs = plt.subplots(4, 1, figsize=(8, 13))
+axs[0].plot(minutes_since_start, torque_drag_vs_time)
+axs[0].set_title('SunCET {} km, noon-midnight, {}'.format(altitude.value, solar_conditions))
+axs[0].set_ylabel('drag torque [Nm]')
+axs[0].grid(True)
+
+axs[1].plot(minutes_since_start, cumulative_torque_drag)
+axs[1].set_ylabel('cumulative drag torque [Nms]')
+axs[1].grid(True)
+
+axs[2].plot(minutes_since_start, cumulative_torque_rods)
+axs[2].set_ylabel('cumulative torque rod torque [Nms]')
+axs[2].grid(True)
+
+axs[3].plot(minutes_since_start, net_torque)
+axs[3].set_xlabel('time [minutes since start]')
+axs[3].set_ylabel('net torque [Nms]')
+axs[3].grid(True)
+
+axs[3].axhline(y=adcs_momentum_storage.value, color='r', linestyle='--', label=f'XACT-15 angular momentum storage: {adcs_momentum_storage.value} Nms')
+axs[3].axhline(y=-adcs_momentum_storage.value, color='r', linestyle='--')
+axs[3].set_ylim([-0.020, 0.020])
+axs[3].legend()
+
+plt.tight_layout()
 
 if torque_drag_peak < torque_rod_torque: 
     print('The disturbance torque is less than what any individual torque rod can dump')
