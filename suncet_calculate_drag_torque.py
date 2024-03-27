@@ -10,12 +10,15 @@ from suncet_get_spatial_average_atmospheric_density import average_atmospheric_d
 # User input (main things that will be exposed by eventual function)
 altitude = 400 * u.km
 solar_conditions = 'max'
+hamburger_or_hotdog = 'hamburger' # Which configuration is the dual deploy solar panel in
 
 # Constants -- really these are tuneable inputs too, but don't expect to change them much for SunCET
 coefficient_of_drag = 2.5 * u.dimensionless_unscaled # depends on shape but 2.5 is typical
 asymmetric_surface_area = 0.144 * u.m**2 # area normal to velocity vector, e.g., the solar array sailing against the wind imparting torque in one direction about the spacecraft
-#torque_lever_arm = (0.36 + (0.1 - 0.061)) * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. 0.36 m [one panel out to get to array center] + (0.1 - 0.061) m [from +Y wall to deployed cg based on CDR Bus slide 13]
-torque_lever_arm = 0.203 * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. Evan's idea to dual deploy by first panel normal, second panel unfolds in perpindicular direction
+if hamburger_or_hotdog == 'hotdog': 
+    torque_lever_arm = (0.36 + (0.1 - 0.061)) * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. 0.36 m [one panel out to get to array center] + (0.1 - 0.061) m [from +Y wall to deployed cg based on CDR Bus slide 13]
+elif hamburger_or_hotdog == 'hamburger':
+    torque_lever_arm = 0.203 * u.m # distance from centroid of the asymmetric protrusion (e.g., the solar arrays) to center of mass. Evan's idea to dual deploy by first panel normal, second panel unfolds in perpindicular direction
 torque_rod_mag_field_angle = 90 * u.deg # angle between the torque rod and the Earth's magnetic field at the location of the spacecraft. Best case scenario is 90º which will provide max torque. 
 
 # Input data
@@ -26,6 +29,7 @@ adcs_momentum_storage = 0.015 * u.N *u.m * u.s # amount of angular momentum the 
 torque_rod_dipole_moment = 0.2 * u.A *u.m**2 # basically the "strength" of each torque rod
 earth_mag_field_strength_in_leo = 50e-6 * u.T # it actually varies but this is a typical value
 torque_rod_torque = (torque_rod_dipole_moment * earth_mag_field_strength_in_leo * np.sin(torque_rod_mag_field_angle.to(u.radian))).to(u.N * u.m)
+torque_rod_duty_cycle = 0.85 # private communication but also based on actual observed performance of XACT-15 on orbit (MinXSS-1). Highest duty cycle is 85%. e
 
 
 def calculate_orbital_velocity(altitude):
@@ -57,7 +61,7 @@ for i in range(1, len(minutes_since_start)):
         direction_of_torque_rod = 1
     else: 
         direction_of_torque_rod = -1
-    cumulative_torque_rod[i] = direction_of_torque_rod * torque_rod_torque * ((minutes_since_start[i] - minutes_since_start[i-1]) * u.minute).to(u.s)
+    cumulative_torque_rod[i] = direction_of_torque_rod * torque_rod_torque * torque_rod_duty_cycle * ((minutes_since_start[i] - minutes_since_start[i-1]) * u.minute).to(u.s)
     cumulative_torque_rod[i] += cumulative_torque_rod[i-1] # since drag is cumulative, also need rods to be cumulative in order to compute the net
     net_momentum[i] = cumulative_torque_drag[i] + cumulative_torque_rod[i]
 
@@ -92,10 +96,10 @@ axs[3].legend()
 
 plt.tight_layout()
 
-if torque_drag_peak < torque_rod_torque: 
-    print('The disturbance torque is less than what any individual torque rod can dump')
+if np.max(net_momentum) < adcs_momentum_storage: 
+    print('The system momentum never exceeds limits. Hooray!')
 else: 
-    print('The disturbance torque is greater than what the torque rods can dump. The wheels will saturate in {:.2f} minutes (assuming best case that they started from rest).'.format(target_time))
+    print('The disturbance torque is greater than what the system can handle. The wheels will saturate in {:.2f} minutes (assuming best case that they started from rest).'.format(target_time))
 
 
 pass
